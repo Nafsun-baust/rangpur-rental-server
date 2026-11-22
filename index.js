@@ -30,6 +30,19 @@ app.get("/", (req, res) => {
   res.send({ message: "Equipment Rental Rangpur server is running" });
 });
 
+app.post("/api/equipment", async (req, res) => {
+  const item = {
+    ...req.body,
+    rentalPrice: Number(req.body.rentalPrice) || 0,
+    availableQuantity: Number(req.body.availableQuantity) || 1,
+    status: "pending",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const result = await equipment.insertOne(item);
+  res.status(201).send(result);
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
