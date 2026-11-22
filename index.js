@@ -43,6 +43,35 @@ app.post("/api/equipment", async (req, res) => {
   res.status(201).send(result);
 });
 
+app.get("/api/equipment/featured", async (req, res) => {
+  const result = await equipment
+    .find({ status: "approved" })
+    .sort({ createdAt: -1 })
+    .limit(6)
+    .toArray();
+  res.send(result);
+});
+
+app.get("/api/equipment", async (req, res) => {
+  const result = await equipment
+    .find({ status: "approved" })
+    .sort({ createdAt: -1 })
+    .toArray();
+  res.send(result);
+});
+
+app.get("/api/equipment/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid equipment id" });
+  }
+  const result = await equipment.findOne({ _id: new ObjectId(id) });
+  if (!result) {
+    return res.status(404).send({ message: "Equipment not found" });
+  }
+  res.send(result);
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
