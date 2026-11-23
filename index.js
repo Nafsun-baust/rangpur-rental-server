@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import { MongoClient, ObjectId } from "mongodb";
+import Stripe from "stripe";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -232,6 +234,79 @@ app.patch("/api/bookings/:id/status", async (req, res) => {
     { $set: { bookingStatus, updatedAt: new Date() } }
   );
   res.send(result);
+});
+app.post("/api/payments/checkout-verify", async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) {
+    return res.status(400).send({ success: false, message: "Session ID is required" });
+  }
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  if (session.status !== "complete" || session.payment_status !== "paid") {
+    return res.status(400).send({ success: false, message: "Payment not completed" });
+  }
+  const existingPayment = await payments.findOne({ sessionId });
+  if (existingPayment) {
+    const existingBooking = await bookings.findOne({ sessionId });
+    return res.send({ success: true, alreadyVerified: true, booking: existingBooking, payment: existingPayment });
+  }
+  const meta = session.metadata || {};
+  const qty = Math.max(1, Number(meta.quantity) || 1);
+  const amountPaid = (session.amount_total || 0) / 100;
+  const transactionId =
+    typeof session.payment_intent === "string"
+      ? session.payment_intent
+      : session.payment_intent?.id || session.id;
+
+  let equipmentDoc = null;
+  if (meta.equipmentId && ObjectId.isValid(meta.equipmentId)) {
+    equipmentDoc = await equipment.findOne({ _id: new ObjectId(meta.equipmentId) });
+    await equipment.updateOne(
+      { _id: new ObjectId(meta.equipmentId) },
+      { $inc: { availableQuantity: -qty } }
+    );
+  }
+
+  const bookingDoc = {
+    equipmentId: meta.equipmentId || "",
+    equipmentName: meta.equipmentName || equipmentDoc?.name || "",
+    equipmentImage: equipmentDoc?.image || "",
+    ownerId: equipmentDoc?.ownerId || meta.ownerId || "",
+    ownerName: equipmentDoc?.ownerName || "",
+    ownerEmail: equipmentDoc?.ownerEmail || "",
+    customerId: meta.customerId || "",
+    customerName: meta.customerName || "",
+    customerEmail: meta.customerEmail || session.customer_email || "",
+    startDate: meta.startDate || "",
+    endDate: meta.endDate || "",
+    rentalDurationDays: Number(meta.days) || 1,
+    quantity: qty,
+    contactNumber: meta.contactNumber || "",
+    deliveryAddress: meta.deliveryAddress || "",
+    notes: meta.notes || "",
+    totalAmount: amountPaid,
+    paymentStatus: "paid",
+    bookingStatus: "confirmed",
+    transactionId,
+    sessionId,
+    bookingDate: new Date(),
+  };
+
+  const bookingResult = await bookings.insertOne(bookingDoc);
+  const paymentDoc = {
+    sessionId,
+    transactionId,
+    bookingId: bookingResult.insertedId.toString(),
+    equipmentId: bookingDoc.equipmentId,
+    customerId: bookingDoc.customerId,
+    customerEmail: bookingDoc.customerEmail,
+    ownerId: bookingDoc.ownerId,
+    amount: amountPaid,
+    currency: session.currency || "usd",
+    paymentStatus: "paid",
+    paidAt: new Date(),
+  };
+  await payments.insertOne(paymentDoc);
+  res.send({ success: true, booking: { _id: bookingResult.insertedId, ...bookingDoc }, payment: paymentDoc });
 });
 
 app.listen(port, () => {
