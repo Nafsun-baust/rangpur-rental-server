@@ -34,6 +34,97 @@ app.get("/", (req, res) => {
   res.send({ message: "Equipment Rental Rangpur server is running" });
 });
 
+const clientUrl = (process.env.CLIENT_URL || "http://localhost:3000")
+  .split(",")[0]
+  .trim();
+
+let jwks = null;
+function getJWKS() {
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
+  }
+  return jwks;
+}
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).send({ message: "Unauthorized" });
+
+  try {
+    try {
+      const { payload } = await jwtVerify(token, getJWKS());
+      if (payload.email) {
+        let user = await users.findOne({ email: payload.email });
+        if (!user) {
+          const newUser = {
+            email: payload.email,
+            name: payload.name || "User",
+            role: payload.role || "customer",
+            image: payload.image || "",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          const inserted = await users.insertOne(newUser);
+          user = { _id: inserted.insertedId, ...newUser };
+        }
+        req.user = {
+          id: user._id.toString(),
+          email: user.email,
+          name: user.name || "",
+          role: user.role || "customer",
+          image: user.image || "",
+        };
+        return next();
+      }
+    } catch {
+      const session = await sessions.findOne({ token });
+      if (session && session.userId) {
+        const userQuery = ObjectId.isValid(session.userId)
+          ? { _id: new ObjectId(session.userId) }
+          : { _id: session.userId };
+        const user = await users.findOne(userQuery);
+        if (user) {
+          req.user = {
+            id: user._id.toString(),
+            email: user.email,
+            name: user.name || "",
+            role: user.role || "customer",
+            image: user.image || "",
+          };
+          return next();
+        }
+      }
+    }
+    return res.status(401).send({ message: "Invalid or expired token" });
+  } catch {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+};
+
+const verifyRenter = (req, res, next) => {
+  if (req.user?.role !== "customer") return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+
+const verifyOwner = (req, res, next) => {
+  if (req.user?.role !== "owner") return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+
+const verifyAdmin = (req, res, next) => {
+  if (req.user?.role !== "admin") return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+
+const verifyOwnerOrAdmin = (req, res, next) => {
+  if (req.user?.role !== "owner" && req.user?.role !== "admin") return res.status(403).send({ message: "Forbidden" });
+  next();
+};
+
 app.post("/api/equipment", async (req, res) => {
   const item = {
     ...req.body,
