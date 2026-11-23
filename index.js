@@ -128,6 +128,45 @@ app.get("/api/equipment/:id", async (req, res) => {
   }
   res.send(result);
 });
+app.get("/api/favorites", async (req, res) => {
+  const filter = req.query.userId
+    ? { userId: req.query.userId }
+    : req.query.userEmail
+    ? { userEmail: req.query.userEmail }
+    : {};
+  const favDocs = await favorites.find(filter).sort({ createdAt: -1 }).toArray();
+  const ids = favDocs
+    .map((f) => f.equipmentId)
+    .filter((id) => ObjectId.isValid(id))
+    .map((id) => new ObjectId(id));
+  const items = ids.length ? await equipment.find({ _id: { $in: ids } }).toArray() : [];
+  const map = new Map(items.map((item) => [item._id.toString(), item]));
+  const result = favDocs
+    .map((doc) => ({ ...doc, equipment: map.get(doc.equipmentId) || null }))
+    .filter((doc) => doc.equipment);
+  res.send(result);
+});
+
+app.post("/api/favorites", async (req, res) => {
+  const { userId, userEmail, equipmentId } = req.body;
+  if (!equipmentId) return res.status(400).send({ message: "equipmentId is required" });
+  const existing = await favorites.findOne({
+    equipmentId,
+    ...(userId ? { userId } : { userEmail }),
+  });
+  if (existing) return res.send({ alreadyExists: true, favorite: existing });
+  const doc = { userId: userId || "", userEmail: userEmail || "", equipmentId, createdAt: new Date() };
+  const result = await favorites.insertOne(doc);
+  res.status(201).send({ _id: result.insertedId, ...doc });
+});
+
+app.delete("/api/favorites/:equipmentId", async (req, res) => {
+  const filter = { equipmentId: req.params.equipmentId };
+  if (req.query.userId) filter.userId = req.query.userId;
+  else if (req.query.userEmail) filter.userEmail = req.query.userEmail;
+  const result = await favorites.deleteOne(filter);
+  res.send(result);
+});
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
