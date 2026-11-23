@@ -167,6 +167,72 @@ app.delete("/api/favorites/:equipmentId", async (req, res) => {
   const result = await favorites.deleteOne(filter);
   res.send(result);
 });
+app.post("/api/bookings/check-availability", async (req, res) => {
+  const { equipmentId, startDate, endDate, quantity } = req.body;
+  if (!equipmentId || !ObjectId.isValid(equipmentId)) {
+    return res.status(400).send({ available: false, message: "Invalid equipment id" });
+  }
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const qty = Number(quantity);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start || !qty || qty < 1) {
+    return res.status(400).send({ available: false, message: "Invalid dates or quantity" });
+  }
+  const item = await equipment.findOne({ _id: new ObjectId(equipmentId) });
+  if (!item || item.status !== "approved") {
+    return res.status(404).send({ available: false, message: "Equipment not available" });
+  }
+  if (Number(item.availableQuantity) < qty) {
+    return res.status(400).send({ available: false, message: `Only ${item.availableQuantity} units available` });
+  }
+  const days = Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)));
+  const units =
+    item.rentalType === "Weekly"
+      ? Math.max(1, Math.ceil(days / 7))
+      : item.rentalType === "Monthly"
+      ? Math.max(1, Math.ceil(days / 30))
+      : days;
+  const totalAmount = Number((units * Number(item.rentalPrice) * qty).toFixed(2));
+  res.send({ available: true, days, units, totalAmount, equipmentName: item.name, rentalType: item.rentalType });
+});
+
+app.get("/api/bookings/my", async (req, res) => {
+  const filter = req.query.customerId
+    ? { customerId: req.query.customerId }
+    : req.query.customerEmail
+    ? { customerEmail: req.query.customerEmail }
+    : {};
+  const result = await bookings.find(filter).sort({ bookingDate: -1 }).toArray();
+  res.send(result);
+});
+
+app.get("/api/bookings/owner", async (req, res) => {
+  const filter = req.query.ownerId
+    ? { ownerId: req.query.ownerId }
+    : req.query.ownerEmail
+    ? { ownerEmail: req.query.ownerEmail }
+    : {};
+  const result = await bookings.find(filter).sort({ bookingDate: -1 }).toArray();
+  res.send(result);
+});
+
+app.get("/api/bookings", async (req, res) => {
+  const result = await bookings.find({}).sort({ bookingDate: -1 }).toArray();
+  res.send(result);
+});
+
+app.patch("/api/bookings/:id/status", async (req, res) => {
+  const { id } = req.params;
+  const { bookingStatus } = req.body;
+  if (!ObjectId.isValid(id) || !["confirmed", "active", "completed", "cancelled"].includes(bookingStatus)) {
+    return res.status(400).send({ message: "Invalid request" });
+  }
+  const result = await bookings.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { bookingStatus, updatedAt: new Date() } }
+  );
+  res.send(result);
+});
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
