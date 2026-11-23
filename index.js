@@ -42,6 +42,33 @@ app.post("/api/equipment", async (req, res) => {
   const result = await equipment.insertOne(item);
   res.status(201).send(result);
 });
+app.patch("/api/equipment/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid equipment id" });
+  }
+  const { _id, ...updates } = req.body;
+  if (updates.rentalPrice !== undefined) {
+    updates.rentalPrice = Number(updates.rentalPrice);
+  }
+  if (updates.availableQuantity !== undefined) {
+    updates.availableQuantity = Number(updates.availableQuantity);
+  }
+  const result = await equipment.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { ...updates, updatedAt: new Date() } }
+  );
+  res.send(result);
+});
+
+app.delete("/api/equipment/:id", async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid equipment id" });
+  }
+  const result = await equipment.deleteOne({ _id: new ObjectId(id) });
+  res.send(result);
+});
 
 app.get("/api/equipment/featured", async (req, res) => {
   const result = await equipment
