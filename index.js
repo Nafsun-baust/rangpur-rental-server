@@ -309,6 +309,50 @@ app.post("/api/payments/checkout-verify", async (req, res) => {
   res.send({ success: true, booking: { _id: bookingResult.insertedId, ...bookingDoc }, payment: paymentDoc });
 });
 
+app.get("/api/users/me", async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).send({ message: "Email is required" });
+  const user = await users.findOne({ email });
+  if (!user) return res.status(404).send({ message: "User not found" });
+  res.send(user);
+});
+
+app.patch("/api/users/me", async (req, res) => {
+  const { email, name, image, phone, address } = req.body;
+  if (!email) return res.status(400).send({ message: "Email is required" });
+  const updates = { updatedAt: new Date() };
+  if (name !== undefined) updates.name = name;
+  if (image !== undefined) updates.image = image;
+  if (phone !== undefined) updates.phone = phone;
+  if (address !== undefined) updates.address = address;
+  await users.updateOne({ email }, { $set: updates });
+  const updated = await users.findOne({ email });
+  res.send(updated);
+});
+
+app.get("/api/users", async (req, res) => {
+  const result = await users.find({}).sort({ createdAt: -1 }).toArray();
+  res.send(result);
+});
+
+app.patch("/api/users/:id/role", async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.body;
+  if (!["customer", "owner", "admin"].includes(role)) {
+    return res.status(400).send({ message: "Invalid role" });
+  }
+  const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+  const result = await users.updateOne(query, { $set: { role, updatedAt: new Date() } });
+  res.send(result);
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+  const { id } = req.params;
+  const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+  const result = await users.deleteOne(query);
+  res.send(result);
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
