@@ -3,6 +3,8 @@ import cors from "cors";
 import "dotenv/config";
 import { MongoClient, ObjectId } from "mongodb";
 import Stripe from "stripe";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
@@ -351,6 +353,77 @@ app.delete("/api/users/:id", async (req, res) => {
   const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
   const result = await users.deleteOne(query);
   res.send(result);
+});
+const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+app.get("/api/analytics/admin", async (req, res) => {
+  const [totalUsers, totalEquipment, totalBookings, pendingApprovals, completedRentals, revenueAgg, monthlyAgg] =
+    await Promise.all([
+      users.countDocuments({}),
+      equipment.countDocuments({}),
+      bookings.countDocuments({}),
+      equipment.countDocuments({ status: "pending" }),
+      bookings.countDocuments({ bookingStatus: "completed" }),
+      payments.aggregate([{ $match: { paymentStatus: "paid" } }, { $group: { _id: null, total: { $sum: "$amount" } } }]).toArray(),
+      bookings
+        .aggregate([
+          { $group: { _id: { year: { $year: "$bookingDate" }, month: { $month: "$bookingDate" } }, bookings: { $sum: 1 }, revenue: { $sum: "$totalAmount" } } },
+          { $sort: { "_id.year": 1, "_id.month": 1 } },
+          { $limit: 12 },
+        ])
+        .toArray(),
+    ]);
+
+  const monthlyStats = monthlyAgg.map((m) => ({
+    month: `${monthNames[(m._id.month || 1) - 1]} ${m._id.year}`,
+    bookings: m.bookings,
+    revenue: Number((m.revenue || 0).toFixed(2)),
+  }));
+
+  res.send({
+    totalUsers,
+    totalEquipment,
+    totalBookings,
+    pendingApprovals,
+    completedRentals,
+    totalRevenue: Number((revenueAgg[0]?.total || 0).toFixed(2)),
+    monthlyStats,
+  });
+});
+
+app.get("/api/analytics/owner", async (req, res) => {
+  const ownerFilter = req.query.ownerId
+    ? { ownerId: req.query.ownerId }
+    : req.query.ownerEmail
+    ? { ownerEmail: req.query.ownerEmail }
+    : {};
+
+  const [totalListedEquipment, completedRentals, earningsAgg, monthlyAgg] = await Promise.all([
+    equipment.countDocuments(ownerFilter),
+    bookings.countDocuments({ ...ownerFilter, bookingStatus: "completed" }),
+    bookings.aggregate([{ $match: { ...ownerFilter, paymentStatus: "paid" } }, { $group: { _id: null, total: { $sum: "$totalAmount" } } }]).toArray(),
+    bookings
+      .aggregate([
+        { $match: { ...ownerFilter, paymentStatus: "paid" } },
+        { $group: { _id: { year: { $year: "$bookingDate" }, month: { $month: "$bookingDate" } }, earnings: { $sum: "$totalAmount" }, bookings: { $sum: 1 } } },
+        { $sort: { "_id.year": 1, "_id.month": 1 } },
+        { $limit: 12 },
+      ])
+      .toArray(),
+  ]);
+
+  const monthlyEarnings = monthlyAgg.map((m) => ({
+    month: `${monthNames[(m._id.month || 1) - 1]} ${m._id.year}`,
+    earnings: Number((m.earnings || 0).toFixed(2)),
+    bookings: m.bookings,
+  }));
+
+  res.send({
+    totalListedEquipment,
+    completedRentals,
+    totalEarnings: Number((earningsAgg[0]?.total || 0).toFixed(2)),
+    monthlyEarnings,
+  });
 });
 
 app.listen(port, () => {
