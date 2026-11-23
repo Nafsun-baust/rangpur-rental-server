@@ -87,6 +87,36 @@ app.get("/api/equipment", async (req, res) => {
   res.send(result);
 });
 
+app.get("/api/equipment", async (req, res) => {
+  const query = { status: "approved" };
+  const { search, category, rentalType, minPrice, maxPrice, availability, sort } =
+    req.query;
+
+  if (search) {
+    query.$or = [
+      { name: { $regex: search, $options: "i" } },
+      { location: { $regex: search, $options: "i" } },
+      { category: { $regex: search, $options: "i" } },
+    ];
+  }
+  if (category && category !== "all") query.category = category;
+  if (rentalType && rentalType !== "all") query.rentalType = rentalType;
+  if (minPrice || maxPrice) {
+    query.rentalPrice = {};
+    if (minPrice) query.rentalPrice.$gte = Number(minPrice);
+    if (maxPrice) query.rentalPrice.$lte = Number(maxPrice);
+  }
+  if (availability === "available") query.availableQuantity = { $gt: 0 };
+  if (availability === "unavailable") query.availableQuantity = { $lte: 0 };
+
+  let sortOption = { createdAt: -1 };
+  if (sort === "price_asc") sortOption = { rentalPrice: 1 };
+  if (sort === "price_desc") sortOption = { rentalPrice: -1 };
+
+  const result = await equipment.find(query).sort(sortOption).toArray();
+  res.send(result);
+});
+
 app.get("/api/equipment/:id", async (req, res) => {
   const { id } = req.params;
   if (!ObjectId.isValid(id)) {
