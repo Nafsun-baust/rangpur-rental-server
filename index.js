@@ -125,46 +125,6 @@ const verifyOwnerOrAdmin = (req, res, next) => {
   next();
 };
 
-app.post("/api/equipment", async (req, res) => {
-  const item = {
-    ...req.body,
-    rentalPrice: Number(req.body.rentalPrice) || 0,
-    availableQuantity: Number(req.body.availableQuantity) || 1,
-    status: "pending",
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-  const result = await equipment.insertOne(item);
-  res.status(201).send(result);
-});
-app.patch("/api/equipment/:id", async (req, res) => {
-  const { id } = req.params;
-  if (!ObjectId.isValid(id)) {
-    return res.status(400).send({ message: "Invalid equipment id" });
-  }
-  const { _id, ...updates } = req.body;
-  if (updates.rentalPrice !== undefined) {
-    updates.rentalPrice = Number(updates.rentalPrice);
-  }
-  if (updates.availableQuantity !== undefined) {
-    updates.availableQuantity = Number(updates.availableQuantity);
-  }
-  const result = await equipment.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: { ...updates, updatedAt: new Date() } }
-  );
-  res.send(result);
-});
-
-app.delete("/api/equipment/:id", async (req, res) => {
-  const { id } = req.params;
-  if (!ObjectId.isValid(id)) {
-    return res.status(400).send({ message: "Invalid equipment id" });
-  }
-  const result = await equipment.deleteOne({ _id: new ObjectId(id) });
-  res.send(result);
-});
-
 app.get("/api/equipment/featured", async (req, res) => {
   const result = await equipment
     .find({ status: "approved" })
@@ -175,17 +135,8 @@ app.get("/api/equipment/featured", async (req, res) => {
 });
 
 app.get("/api/equipment", async (req, res) => {
-  const result = await equipment
-    .find({ status: "approved" })
-    .sort({ createdAt: -1 })
-    .toArray();
-  res.send(result);
-});
-
-app.get("/api/equipment", async (req, res) => {
   const query = { status: "approved" };
-  const { search, category, rentalType, minPrice, maxPrice, availability, sort } =
-    req.query;
+  const { search, category, rentalType, minPrice, maxPrice, availability, sort } = req.query;
 
   if (search) {
     query.$or = [
@@ -212,6 +163,32 @@ app.get("/api/equipment", async (req, res) => {
   res.send(result);
 });
 
+app.get("/api/equipment/all", verifyToken, verifyAdmin, async (req, res) => {
+  const result = await equipment.find({}).sort({ createdAt: -1 }).toArray();
+  res.send(result);
+});
+
+app.get("/api/equipment/my", verifyToken, verifyOwner, async (req, res) => {
+  const result = await equipment
+    .find({ $or: [{ ownerId: req.user.id }, { ownerEmail: req.user.email }] })
+    .sort({ createdAt: -1 })
+    .toArray();
+  res.send(result);
+});
+
+app.patch("/api/equipment/:id/status", verifyToken, verifyAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  if (!ObjectId.isValid(id) || !["pending", "approved", "rejected"].includes(status)) {
+    return res.status(400).send({ message: "Invalid request" });
+  }
+  const result = await equipment.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status, updatedAt: new Date() } }
+  );
+  res.send(result);
+});
+
 app.get("/api/equipment/:id", async (req, res) => {
   const { id } = req.params;
   if (!ObjectId.isValid(id)) {
@@ -223,13 +200,64 @@ app.get("/api/equipment/:id", async (req, res) => {
   }
   res.send(result);
 });
-app.get("/api/favorites", async (req, res) => {
-  const filter = req.query.userId
-    ? { userId: req.query.userId }
-    : req.query.userEmail
-    ? { userEmail: req.query.userEmail }
-    : {};
-  const favDocs = await favorites.find(filter).sort({ createdAt: -1 }).toArray();
+
+app.post("/api/equipment", verifyToken, verifyOwner, async (req, res) => {
+  const item = {
+    ...req.body,
+    ownerId: req.user.id,
+    ownerName: req.body.ownerName || req.user.name,
+    ownerEmail: req.user.email,
+    ownerImage: req.body.ownerImage || req.user.image || "",
+    rentalPrice: Number(req.body.rentalPrice) || 0,
+    availableQuantity: Number(req.body.availableQuantity) || 1,
+    status: "pending",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  const result = await equipment.insertOne(item);
+  res.status(201).send(result);
+});
+
+app.patch("/api/equipment/:id", verifyToken, verifyOwnerOrAdmin, async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid equipment id" });
+  }
+  const existing = await equipment.findOne({ _id: new ObjectId(id) });
+  if (!existing) return res.status(404).send({ message: "Equipment not found" });
+  if (req.user.role === "owner" && existing.ownerId !== req.user.id && existing.ownerEmail !== req.user.email) {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+  const { _id, status, ownerId, ownerEmail, ...updates } = req.body;
+  if (updates.rentalPrice !== undefined) updates.rentalPrice = Number(updates.rentalPrice);
+  if (updates.availableQuantity !== undefined) updates.availableQuantity = Number(updates.availableQuantity);
+  if (req.user.role === "admin" && status) updates.status = status;
+  const result = await equipment.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { ...updates, updatedAt: new Date() } }
+  );
+  res.send(result);
+});
+
+app.delete("/api/equipment/:id", verifyToken, verifyOwnerOrAdmin, async (req, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).send({ message: "Invalid equipment id" });
+  }
+  const existing = await equipment.findOne({ _id: new ObjectId(id) });
+  if (!existing) return res.status(404).send({ message: "Equipment not found" });
+  if (req.user.role === "owner" && existing.ownerId !== req.user.id && existing.ownerEmail !== req.user.email) {
+    return res.status(403).send({ message: "Forbidden" });
+  }
+  const result = await equipment.deleteOne({ _id: new ObjectId(id) });
+  res.send(result);
+});
+
+app.get("/api/favorites", verifyToken, verifyRenter, async (req, res) => {
+  const favDocs = await favorites
+    .find({ $or: [{ userId: req.user.id }, { userEmail: req.user.email }] })
+    .sort({ createdAt: -1 })
+    .toArray();
   const ids = favDocs
     .map((f) => f.equipmentId)
     .filter((id) => ObjectId.isValid(id))
@@ -242,27 +270,28 @@ app.get("/api/favorites", async (req, res) => {
   res.send(result);
 });
 
-app.post("/api/favorites", async (req, res) => {
-  const { userId, userEmail, equipmentId } = req.body;
+app.post("/api/favorites", verifyToken, verifyRenter, async (req, res) => {
+  const { equipmentId } = req.body;
   if (!equipmentId) return res.status(400).send({ message: "equipmentId is required" });
   const existing = await favorites.findOne({
     equipmentId,
-    ...(userId ? { userId } : { userEmail }),
+    $or: [{ userId: req.user.id }, { userEmail: req.user.email }],
   });
   if (existing) return res.send({ alreadyExists: true, favorite: existing });
-  const doc = { userId: userId || "", userEmail: userEmail || "", equipmentId, createdAt: new Date() };
+  const doc = { userId: req.user.id, userEmail: req.user.email, equipmentId, createdAt: new Date() };
   const result = await favorites.insertOne(doc);
   res.status(201).send({ _id: result.insertedId, ...doc });
 });
 
-app.delete("/api/favorites/:equipmentId", async (req, res) => {
-  const filter = { equipmentId: req.params.equipmentId };
-  if (req.query.userId) filter.userId = req.query.userId;
-  else if (req.query.userEmail) filter.userEmail = req.query.userEmail;
-  const result = await favorites.deleteOne(filter);
+app.delete("/api/favorites/:equipmentId", verifyToken, verifyRenter, async (req, res) => {
+  const result = await favorites.deleteOne({
+    equipmentId: req.params.equipmentId,
+    $or: [{ userId: req.user.id }, { userEmail: req.user.email }],
+  });
   res.send(result);
 });
-app.post("/api/bookings/check-availability", async (req, res) => {
+
+app.post("/api/bookings/check-availability", verifyToken, verifyRenter, async (req, res) => {
   const { equipmentId, startDate, endDate, quantity } = req.body;
   if (!equipmentId || !ObjectId.isValid(equipmentId)) {
     return res.status(400).send({ available: false, message: "Invalid equipment id" });
@@ -291,36 +320,37 @@ app.post("/api/bookings/check-availability", async (req, res) => {
   res.send({ available: true, days, units, totalAmount, equipmentName: item.name, rentalType: item.rentalType });
 });
 
-app.get("/api/bookings/my", async (req, res) => {
-  const filter = req.query.customerId
-    ? { customerId: req.query.customerId }
-    : req.query.customerEmail
-    ? { customerEmail: req.query.customerEmail }
-    : {};
-  const result = await bookings.find(filter).sort({ bookingDate: -1 }).toArray();
+app.get("/api/bookings/my", verifyToken, verifyRenter, async (req, res) => {
+  const result = await bookings
+    .find({ $or: [{ customerId: req.user.id }, { customerEmail: req.user.email }] })
+    .sort({ bookingDate: -1 })
+    .toArray();
   res.send(result);
 });
 
-app.get("/api/bookings/owner", async (req, res) => {
-  const filter = req.query.ownerId
-    ? { ownerId: req.query.ownerId }
-    : req.query.ownerEmail
-    ? { ownerEmail: req.query.ownerEmail }
-    : {};
-  const result = await bookings.find(filter).sort({ bookingDate: -1 }).toArray();
+app.get("/api/bookings/owner", verifyToken, verifyOwner, async (req, res) => {
+  const result = await bookings
+    .find({ $or: [{ ownerId: req.user.id }, { ownerEmail: req.user.email }] })
+    .sort({ bookingDate: -1 })
+    .toArray();
   res.send(result);
 });
 
-app.get("/api/bookings", async (req, res) => {
+app.get("/api/bookings", verifyToken, verifyAdmin, async (req, res) => {
   const result = await bookings.find({}).sort({ bookingDate: -1 }).toArray();
   res.send(result);
 });
 
-app.patch("/api/bookings/:id/status", async (req, res) => {
+app.patch("/api/bookings/:id/status", verifyToken, verifyOwnerOrAdmin, async (req, res) => {
   const { id } = req.params;
   const { bookingStatus } = req.body;
   if (!ObjectId.isValid(id) || !["confirmed", "active", "completed", "cancelled"].includes(bookingStatus)) {
     return res.status(400).send({ message: "Invalid request" });
+  }
+  const existing = await bookings.findOne({ _id: new ObjectId(id) });
+  if (!existing) return res.status(404).send({ message: "Booking not found" });
+  if (req.user.role === "owner" && existing.ownerId !== req.user.id && existing.ownerEmail !== req.user.email) {
+    return res.status(403).send({ message: "Forbidden" });
   }
   const result = await bookings.updateOne(
     { _id: new ObjectId(id) },
@@ -328,7 +358,8 @@ app.patch("/api/bookings/:id/status", async (req, res) => {
   );
   res.send(result);
 });
-app.post("/api/payments/checkout-verify", async (req, res) => {
+
+app.post("/api/payments/checkout-verify", verifyToken, async (req, res) => {
   const { sessionId } = req.body;
   if (!sessionId) {
     return res.status(400).send({ success: false, message: "Session ID is required" });
@@ -366,9 +397,9 @@ app.post("/api/payments/checkout-verify", async (req, res) => {
     ownerId: equipmentDoc?.ownerId || meta.ownerId || "",
     ownerName: equipmentDoc?.ownerName || "",
     ownerEmail: equipmentDoc?.ownerEmail || "",
-    customerId: meta.customerId || "",
-    customerName: meta.customerName || "",
-    customerEmail: meta.customerEmail || session.customer_email || "",
+    customerId: meta.customerId || req.user.id,
+    customerName: meta.customerName || req.user.name,
+    customerEmail: meta.customerEmail || session.customer_email || req.user.email,
     startDate: meta.startDate || "",
     endDate: meta.endDate || "",
     rentalDurationDays: Number(meta.days) || 1,
@@ -402,33 +433,30 @@ app.post("/api/payments/checkout-verify", async (req, res) => {
   res.send({ success: true, booking: { _id: bookingResult.insertedId, ...bookingDoc }, payment: paymentDoc });
 });
 
-app.get("/api/users/me", async (req, res) => {
-  const { email } = req.query;
-  if (!email) return res.status(400).send({ message: "Email is required" });
-  const user = await users.findOne({ email });
+app.get("/api/users/me", verifyToken, async (req, res) => {
+  const user = await users.findOne({ email: req.user.email });
   if (!user) return res.status(404).send({ message: "User not found" });
   res.send(user);
 });
 
-app.patch("/api/users/me", async (req, res) => {
-  const { email, name, image, phone, address } = req.body;
-  if (!email) return res.status(400).send({ message: "Email is required" });
+app.patch("/api/users/me", verifyToken, async (req, res) => {
+  const { name, image, phone, address } = req.body;
   const updates = { updatedAt: new Date() };
   if (name !== undefined) updates.name = name;
   if (image !== undefined) updates.image = image;
   if (phone !== undefined) updates.phone = phone;
   if (address !== undefined) updates.address = address;
-  await users.updateOne({ email }, { $set: updates });
-  const updated = await users.findOne({ email });
+  await users.updateOne({ email: req.user.email }, { $set: updates });
+  const updated = await users.findOne({ email: req.user.email });
   res.send(updated);
 });
 
-app.get("/api/users", async (req, res) => {
+app.get("/api/users", verifyToken, verifyAdmin, async (req, res) => {
   const result = await users.find({}).sort({ createdAt: -1 }).toArray();
   res.send(result);
 });
 
-app.patch("/api/users/:id/role", async (req, res) => {
+app.patch("/api/users/:id/role", verifyToken, verifyAdmin, async (req, res) => {
   const { id } = req.params;
   const { role } = req.body;
   if (!["customer", "owner", "admin"].includes(role)) {
@@ -439,15 +467,17 @@ app.patch("/api/users/:id/role", async (req, res) => {
   res.send(result);
 });
 
-app.delete("/api/users/:id", async (req, res) => {
+app.delete("/api/users/:id", verifyToken, verifyAdmin, async (req, res) => {
   const { id } = req.params;
+  if (id === req.user.id) return res.status(400).send({ message: "Cannot delete your own account" });
   const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
   const result = await users.deleteOne(query);
   res.send(result);
 });
+
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-app.get("/api/analytics/admin", async (req, res) => {
+app.get("/api/analytics/admin", verifyToken, verifyAdmin, async (req, res) => {
   const [totalUsers, totalEquipment, totalBookings, pendingApprovals, completedRentals, revenueAgg, monthlyAgg] =
     await Promise.all([
       users.countDocuments({}),
@@ -482,12 +512,8 @@ app.get("/api/analytics/admin", async (req, res) => {
   });
 });
 
-app.get("/api/analytics/owner", async (req, res) => {
-  const ownerFilter = req.query.ownerId
-    ? { ownerId: req.query.ownerId }
-    : req.query.ownerEmail
-    ? { ownerEmail: req.query.ownerEmail }
-    : {};
+app.get("/api/analytics/owner", verifyToken, verifyOwner, async (req, res) => {
+  const ownerFilter = { $or: [{ ownerId: req.user.id }, { ownerEmail: req.user.email }] };
 
   const [totalListedEquipment, completedRentals, earningsAgg, monthlyAgg] = await Promise.all([
     equipment.countDocuments(ownerFilter),
@@ -517,6 +543,10 @@ app.get("/api/analytics/owner", async (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
+}
+
+export default app;
